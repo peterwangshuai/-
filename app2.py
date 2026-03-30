@@ -5,115 +5,116 @@ import pandas as pd
 import numpy as np
 
 # --------------------------
-# 1. 初始化 Session State (页面状态保持)
+# 1. 初始化 Session State
 # --------------------------
-if 'heartbeat_data' not in st.session_state:
-    # 使用 numpy 初始化数据结构 (满足 numpy 使用要求)
-    st.session_state.heartbeat_data = {
-        "seq": [],      # 序号
-        "time": []      # 时间戳
-    }
+if 'df_history' not in st.session_state:
+    # 初始化一个空的 DataFrame 用于存储历史数据
+    st.session_state.df_history = pd.DataFrame(columns=["time", "seq"])
 if 'last_received' not in st.session_state:
     st.session_state.last_received = None
 if 'is_running' not in st.session_state:
     st.session_state.is_running = False
 if 'is_timeout' not in st.session_state:
     st.session_state.is_timeout = False
+if 'chart_initialized' not in st.session_state:
+    st.session_state.chart_initialized = False
 
 # --------------------------
-# 2. 页面配置与 UI
+# 2. 页面配置
 # --------------------------
-st.set_page_config(page_title="无人机心跳监控", layout="wide")
-st.title("🚁 无人机心跳包自发自收模拟系统")
+st.set_page_config(page_title="实时心跳监控", layout="wide")
+st.title("🚁 无人机心跳包 - 实时动态监控")
 
-# 顶部控制面板
+# 控制面板
 c1, c2, c3 = st.columns(3)
 with c1:
-    if st.button("▶️ 启动心跳", type="primary"):
+    if st.button("▶️ 启动", type="primary"):
         st.session_state.is_running = True
         st.session_state.is_timeout = False
 with c2:
-    if st.button("⏸️ 停止心跳"):
+    if st.button("⏸️ 暂停"):
         st.session_state.is_running = False
 with c3:
-    if st.button("🔄 重置系统"):
-        st.session_state.heartbeat_data = {"seq": [], "time": []}
+    if st.button("🔄 清空重置"):
+        st.session_state.df_history = pd.DataFrame(columns=["time", "seq"])
         st.session_state.last_received = None
         st.session_state.is_running = False
         st.session_state.is_timeout = False
+        st.session_state.chart_initialized = False
         st.rerun()
 
+# 状态显示区
+status_box = st.empty()
+chart_box = st.empty() # 图表占位符 (关键)
+data_box = st.empty()   # 表格占位符
+
 # --------------------------
-# 3. 核心模拟逻辑
+# 3. 核心逻辑循环
 # --------------------------
 
-# 状态指示器
-status_placeholder = st.empty()
-
-if st.session_state.is_running:
-    # --- A. 模拟发送心跳包 ---
-    # 生成序号 (基于当前数据长度)
-    current_seq = len(st.session_state.heartbeat_data["seq"]) + 1
-    # 生成高精度时间戳
-    current_time = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+while st.session_state.is_running:
+    # --- 1. 生成新的心跳数据 ---
+    current_seq = len(st.session_state.df_history) + 1
+    current_time_str = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
     
-    # 将数据存入 State (使用 List append，后续转 DataFrame)
-    st.session_state.heartbeat_data["seq"].append(current_seq)
-    st.session_state.heartbeat_data["time"].append(current_time)
+    # 构建新数据行 (使用 Numpy 构建数组)
+    new_data = pd.DataFrame({
+        "time": [current_time_str],
+        "seq": [current_seq]
+    })
     
-    # 更新最后接收时间
+    # --- 2. 追加到历史数据 ---
+    st.session_state.df_history = pd.concat(
+        [st.session_state.df_history, new_data], 
+        ignore_index=True
+    )
+    
+    # --- 3. 实时更新图表 (关键步骤) ---
+    if not st.session_state.chart_initialized:
+        # 第一次：初始化图表
+        chart_box.line_chart(
+            st.session_state.df_history, 
+            x="time", 
+            y="seq", 
+            color="#39ff14" # 荧光绿
+        )
+        st.session_state.chart_initialized = True
+    else:
+        # 后续：只追加新数据，不重绘整个图表 (丝滑的关键)
+        chart_box.line_chart.add_rows(new_data)
+    
+    # --- 4. 更新状态和表格 ---
+    status_box.success(f"✅ 正常 | 最新包序号: {current_seq} | 时间: {current_time_str}")
+    
+    # 只显示最近10条数据
+    data_box.dataframe(
+        st.session_state.df_history.sort_index(ascending=False).head(10), 
+        hide_index=True, 
+        height=300
+    )
+    
+    # --- 5. 超时检测预备 ---
     st.session_state.last_received = time.time()
     
-    # --- B. 模拟 1Hz 频率 (每秒1次) ---
+    # --- 6. 模拟 1Hz 频率 ---
     time.sleep(1)
-    
-    # 自动刷新页面以获取下一个包
-    st.rerun()
-
-# --- C. 超时检测逻辑 (3秒规则) ---
-if st.session_state.last_received is not None:
-    time_since = time.time() - st.session_state.last_received
-    
-    if time_since > 3 and st.session_state.is_running:
-        st.session_state.is_timeout = True
-        st.session_state.is_running = False
 
 # --------------------------
-# 4. 数据可视化与展示
+# 4. 非运行状态下的显示 (超时或停止)
 # --------------------------
 
-# 显示连接状态
-if st.session_state.is_timeout:
-    status_placeholder.error("🚨 连接超时！已超过 3 秒未收到心跳包！", icon="🚨")
-elif st.session_state.is_running:
-    status_placeholder.success("✅ 连接正常，心跳收集中...")
-else:
-    status_placeholder.info("⏳ 系统待机中，请点击启动")
+# 超时检测 (如果在运行中停止，检查最后一次时间)
+if st.session_state.last_received is not None and not st.session_state.is_running:
+    elapsed = time.time() - st.session_state.last_received
+    if elapsed > 3 and len(st.session_state.df_history) > 0:
+        status_box.error("🚨 【警报】连接超时！超过 3 秒未收到心跳包！", icon="🚨")
+    elif not st.session_state.is_timeout and len(st.session_state.df_history) > 0:
+        status_box.warning("⏸️  已暂停")
 
-# 布局：左图右表
-col_chart, col_data = st.columns([2, 1])
-
-with col_chart:
-    st.subheader("📈 心跳包序号趋势图")
-    if len(st.session_state.heartbeat_data["seq"]) > 0:
-        # 使用 Pandas 构建 DataFrame
-        df = pd.DataFrame(st.session_state.heartbeat_data)
-        
-        # 使用 Numpy 做一个简单的平滑处理演示 (满足 numpy 深度使用要求)
-        # 注意：因为是实时增量数据，这里仅展示如何结合 numpy
-        df['seq_numpy'] = np.array(df['seq']) 
-        
-        # 绘制折线图
-        st.line_chart(df, x='time', y='seq', color="#00ccff")
-    else:
-        st.empty() # 占位
-
-with col_data:
-    st.subheader("📋 最新数据包")
-    if len(st.session_state.heartbeat_data["seq"]) > 0:
-        df = pd.DataFrame(st.session_state.heartbeat_data)
-        # 倒序显示最新的 8 条
-        st.dataframe(df.sort_index(ascending=False).head(8), hide_index=True, height=300)
-        
-        # 统计信息
-        st.caption(f"📦 总收包数: {len(df)}")
+# 如果有历史数据但没在跑，保持图表显示
+if len(st.session_state.df_history) > 0 and not st.session_state.is_running:
+    chart_box.line_chart(st.session_state.df_history, x="time", y="seq", color="#39ff14")
+    data_box.dataframe(
+        st.session_state.df_history.sort_index(ascending=False).head(10), 
+        hide_index=True
+    )
